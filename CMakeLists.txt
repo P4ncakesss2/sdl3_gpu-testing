@@ -12,6 +12,13 @@ set(SDL_SHARED OFF CACHE BOOL "Build SDL as a shared library" FORCE)
 set(SDL_STATIC ON CACHE BOOL "Build SDL as a static library" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL test library" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "Build SDL tests" FORCE)
+# Keep the game-facing SDL subsystems, but skip features this project does not use.
+set(SDL_RENDER ON CACHE BOOL "Build SDL's 2D renderer subsystem" FORCE)
+set(SDL_CAMERA OFF CACHE BOOL "Build SDL camera support" FORCE)
+set(SDL_SENSOR OFF CACHE BOOL "Build SDL sensor support" FORCE)
+set(SDL_TRAY OFF CACHE BOOL "Build SDL system tray support" FORCE)
+set(SDL_NOTIFICATION OFF CACHE BOOL "Build SDL notification support" FORCE)
+set(SDL_GPU_OPENXR OFF CACHE BOOL "Build SDL_GPU OpenXR support" FORCE)
 add_subdirectory(external/SDL EXCLUDE_FROM_ALL)
 
 add_library(cglm INTERFACE)

@@ -25,6 +25,17 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev \
+            libwayland-dev libwayland-egl-backend-dev libdecor-0-dev \
+            libdrm-dev libgbm-dev libudev-dev libvulkan-dev
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
