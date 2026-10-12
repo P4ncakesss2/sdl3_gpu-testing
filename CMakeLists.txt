@@ -8,28 +8,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL/CMakeLists.txt")
-    message(FATAL_ERROR "SDL3 is missing. Initialize submodules with: git submodule update --init --recursive")
-endif()
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL_shadercross/external/DirectXShaderCompiler/CMakeLists.txt"
-   OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL_shadercross/external/SPIRV-Cross/CMakeLists.txt")
-    message(FATAL_ERROR "SDL_shadercross dependencies are missing. Run: git submodule update --init --recursive")
-endif()
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/cglm/CMakeLists.txt"
-   OR NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/stb/stb_image.h")
-    message(FATAL_ERROR "cglm or stb_image is missing. Initialize the cglm submodule and restore external/stb/stb_image.h")
-endif()
-
 set(SDL_SHARED OFF CACHE BOOL "Build SDL as a shared library" FORCE)
 set(SDL_STATIC ON CACHE BOOL "Build SDL as a static library" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "Build SDL test library" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "Build SDL tests" FORCE)
 add_subdirectory(external/SDL EXCLUDE_FROM_ALL)
 
-set(CGLM_SHARED OFF CACHE BOOL "Build cglm as a shared library" FORCE)
-set(CGLM_STATIC ON CACHE BOOL "Build cglm as a static library" FORCE)
-set(CGLM_USE_TEST OFF CACHE BOOL "Disable cglm tests" FORCE)
-add_subdirectory(external/cglm EXCLUDE_FROM_ALL)
+add_library(cglm INTERFACE)
+target_include_directories(cglm SYSTEM INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/external/cglm/include"
+)
 
 set(SDLSHADERCROSS_VENDORED ON CACHE BOOL "Build shadercross dependencies from its submodules" FORCE)
 set(SDLSHADERCROSS_DXC ON CACHE BOOL "Enable HLSL compilation via DXC" FORCE)

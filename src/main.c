@@ -13,6 +13,88 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+typedef struct CubeVertex {
+    float position[3];
+    float uv[2];
+} CubeVertex;
+
+static const CubeVertex cube_vertices[] = {
+    /* Front */
+    {{-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f}}, {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}},
+    {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}}, {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}},
+    /* Back */
+    {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f}}, {{-0.5f, -0.5f, -0.5f}, {1.0f, 1.0f}},
+    {{-0.5f,  0.5f, -0.5f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}},
+    /* Right */
+    {{ 0.5f, -0.5f,  0.5f}, {0.0f, 1.0f}}, {{ 0.5f, -0.5f, -0.5f}, {1.0f, 1.0f}},
+    {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f}}, {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}},
+    /* Left */
+    {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f}}, {{-0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}},
+    {{-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}},
+    /* Top */
+    {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}}, {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}},
+    {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f}}, {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}},
+    /* Bottom */
+    {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f}}, {{ 0.5f, -0.5f, -0.5f}, {1.0f, 1.0f}},
+    {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}}, {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}}
+};
+
+static const Uint16 cube_indices[] = {
+    0, 1, 2, 2, 3, 0,   4, 5, 6, 6, 7, 4,
+    8, 9, 10, 10, 11, 8, 12, 13, 14, 14, 15, 12,
+    16, 17, 18, 18, 19, 16, 20, 21, 22, 22, 23, 20
+};
+
+static SDL_GPUBuffer *create_uploaded_buffer(SDL_GPUDevice *device,
+                                              SDL_GPUCopyPass *copy_pass,
+                                              SDL_GPUBufferUsageFlags usage,
+                                              const void *data, size_t size)
+{
+    SDL_GPUBufferCreateInfo buffer_info = {
+        .usage = usage,
+        .size = (Uint32)size
+    };
+    SDL_GPUBuffer *buffer = SDL_CreateGPUBuffer(device, &buffer_info);
+    if (buffer == NULL) {
+        SDL_Log("Could not create mesh buffer: %s", SDL_GetError());
+        return NULL;
+    }
+
+    SDL_GPUTransferBufferCreateInfo transfer_info = {
+        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+        .size = (Uint32)size
+    };
+    SDL_GPUTransferBuffer *transfer_buffer =
+        SDL_CreateGPUTransferBuffer(device, &transfer_info);
+    if (transfer_buffer == NULL) {
+        SDL_Log("Could not create mesh upload buffer: %s", SDL_GetError());
+        SDL_ReleaseGPUBuffer(device, buffer);
+        return NULL;
+    }
+    void *mapped_data = SDL_MapGPUTransferBuffer(device, transfer_buffer, false);
+    if (mapped_data == NULL) {
+        SDL_Log("Could not map mesh upload buffer: %s", SDL_GetError());
+        SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+        SDL_ReleaseGPUBuffer(device, buffer);
+        return NULL;
+    }
+    SDL_memcpy(mapped_data, data, size);
+    SDL_UnmapGPUTransferBuffer(device, transfer_buffer);
+
+    SDL_GPUTransferBufferLocation source = {
+        .transfer_buffer = transfer_buffer,
+        .offset = 0
+    };
+    SDL_GPUBufferRegion destination = {
+        .buffer = buffer,
+        .offset = 0,
+        .size = (Uint32)size
+    };
+    SDL_UploadToGPUBuffer(copy_pass, &source, &destination, false);
+    SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+    return buffer;
+}
+
 static SDL_GPUShader *load_shader(SDL_GPUDevice *device, const char *shader_name)
 {
     SDL_GPUShaderStage stage;
@@ -70,7 +152,8 @@ static SDL_GPUShader *load_shader(SDL_GPUDevice *device, const char *shader_name
     SDL_GPUShaderCreateInfo create_info = {
         .code_size = code_size,
         .code = code,
-        .entrypoint = "main",
+        /* Metal reserves `main`, so shadercross emits the MSL entry point as `main0`. */
+        .entrypoint = format == SDL_GPU_SHADERFORMAT_MSL ? "main0" : "main",
         .format = format,
         .stage = stage,
         .num_samplers = stage == SDL_GPU_SHADERSTAGE_FRAGMENT ? 1 : 0,
@@ -93,6 +176,7 @@ static SDL_GPUTexture *load_texture(SDL_GPUDevice *device, const char *name,
     int width = 0;
     int height = 0;
     int channels = 0;
+    Uint32 mip_levels = 1;
     size_t pixel_bytes = 0;
     stbi_uc *pixels = NULL;
     SDL_GPUTexture *texture = NULL;
@@ -116,15 +200,21 @@ static SDL_GPUTexture *load_texture(SDL_GPUDevice *device, const char *name,
         SDL_Log("Texture dimensions are invalid or too large: %s", path);
         goto cleanup;
     }
+    for (Uint32 largest_dimension = (Uint32)SDL_max(width, height);
+         largest_dimension > 1;
+         largest_dimension >>= 1) {
+        ++mip_levels;
+    }
 
     SDL_GPUTextureCreateInfo texture_info = {
         .type = SDL_GPU_TEXTURETYPE_2D,
         .format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER |
+                 SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
         .width = (Uint32)width,
         .height = (Uint32)height,
         .layer_count_or_depth = 1,
-        .num_levels = 1,
+        .num_levels = mip_levels,
         .sample_count = SDL_GPU_SAMPLECOUNT_1
     };
     texture = SDL_CreateGPUTexture(device, &texture_info);
@@ -178,6 +268,7 @@ static SDL_GPUTexture *load_texture(SDL_GPUDevice *device, const char *name,
     };
     SDL_UploadToGPUTexture(copy_pass, &source, &destination, false);
     SDL_EndGPUCopyPass(copy_pass);
+    SDL_GenerateMipmapsForGPUTexture(command_buffer, texture);
     if (!SDL_SubmitGPUCommandBuffer(command_buffer)) {
         command_buffer = NULL;
         SDL_Log("Could not submit texture upload: %s", SDL_GetError());
@@ -188,10 +279,13 @@ static SDL_GPUTexture *load_texture(SDL_GPUDevice *device, const char *name,
     SDL_GPUSamplerCreateInfo sampler_info = {
         .min_filter = SDL_GPU_FILTER_LINEAR,
         .mag_filter = SDL_GPU_FILTER_LINEAR,
-        .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
-        .address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-        .address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
-        .address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_REPEAT
+        .mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR,
+        .address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .max_anisotropy = 16.0f,
+        .max_lod = (float)(mip_levels - 1),
+        .enable_anisotropy = true
     };
     sampler = SDL_CreateGPUSampler(device, &sampler_info);
     if (sampler == NULL) {
@@ -222,10 +316,16 @@ int main(int argc, char **argv)
     SDL_GPUShader *fragment_shader = NULL;
     SDL_GPUTexture *triangle_texture = NULL;
     SDL_GPUSampler *triangle_sampler = NULL;
+    SDL_GPUBuffer *cube_vertex_buffer = NULL;
+    SDL_GPUBuffer *cube_index_buffer = NULL;
     SDL_GPUGraphicsPipeline *pipeline = NULL;
     SDL_GPUTexture *msaa_target = NULL;
+    SDL_GPUTexture *depth_target = NULL;
     Uint32 msaa_target_width = 0;
     Uint32 msaa_target_height = 0;
+    Uint32 depth_target_width = 0;
+    Uint32 depth_target_height = 0;
+    bool depth_target_msaa = false;
     bool vsync_enabled = false;
     const char *shader_name = argc > 1 ? argv[1] : "triangle";
 
@@ -234,7 +334,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    window = SDL_CreateWindow("SDL3 GPU Triangle", 800, 600,
+    window = SDL_CreateWindow("SDL3 GPU Textured Cube", 800, 600,
                               SDL_WINDOW_RESIZABLE);
     if (window == NULL) {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
@@ -243,7 +343,7 @@ int main(int argc, char **argv)
 
     device = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV |
                                  SDL_GPU_SHADERFORMAT_DXIL |
-                                 SDL_GPU_SHADERFORMAT_MSL, true, NULL);
+                                 SDL_GPU_SHADERFORMAT_MSL, false, NULL);
     if (device == NULL) {
         SDL_Log("SDL_CreateGPUDevice failed: %s", SDL_GetError());
         goto cleanup;
@@ -288,6 +388,35 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    {
+        SDL_GPUCommandBuffer *upload_command_buffer = SDL_AcquireGPUCommandBuffer(device);
+        if (upload_command_buffer == NULL) {
+            SDL_Log("Could not acquire mesh upload command buffer: %s", SDL_GetError());
+            goto cleanup;
+        }
+        SDL_GPUCopyPass *copy_pass = SDL_BeginGPUCopyPass(upload_command_buffer);
+        if (copy_pass == NULL) {
+            SDL_Log("Could not begin mesh upload: %s", SDL_GetError());
+            SDL_CancelGPUCommandBuffer(upload_command_buffer);
+            goto cleanup;
+        }
+        cube_vertex_buffer = create_uploaded_buffer(
+            device, copy_pass, SDL_GPU_BUFFERUSAGE_VERTEX,
+            cube_vertices, sizeof(cube_vertices));
+        cube_index_buffer = create_uploaded_buffer(
+            device, copy_pass, SDL_GPU_BUFFERUSAGE_INDEX,
+            cube_indices, sizeof(cube_indices));
+        SDL_EndGPUCopyPass(copy_pass);
+        if (cube_vertex_buffer == NULL || cube_index_buffer == NULL) {
+            SDL_CancelGPUCommandBuffer(upload_command_buffer);
+            goto cleanup;
+        }
+        if (!SDL_SubmitGPUCommandBuffer(upload_command_buffer)) {
+            SDL_Log("Could not submit mesh upload: %s", SDL_GetError());
+            goto cleanup;
+        }
+    }
+
     SDL_GPUColorTargetDescription color_target = {
         .format = SDL_GetGPUSwapchainTextureFormat(device, window),
         .blend_state = {
@@ -304,10 +433,35 @@ int main(int argc, char **argv)
                                 SDL_GPU_COLORCOMPONENT_A
         }
     };
+    SDL_GPUVertexBufferDescription vertex_buffer_description = {
+        .slot = 0,
+        .pitch = sizeof(CubeVertex),
+        .input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX,
+        .instance_step_rate = 0
+    };
+    SDL_GPUVertexAttribute vertex_attributes[] = {
+        {
+            .location = 0,
+            .buffer_slot = 0,
+            .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+            .offset = offsetof(CubeVertex, position)
+        },
+        {
+            .location = 1,
+            .buffer_slot = 0,
+            .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,
+            .offset = offsetof(CubeVertex, uv)
+        }
+    };
     SDL_GPUGraphicsPipelineCreateInfo pipeline_info = {
         .vertex_shader = vertex_shader,
         .fragment_shader = fragment_shader,
-        .vertex_input_state = { 0 },
+        .vertex_input_state = {
+            .vertex_buffer_descriptions = &vertex_buffer_description,
+            .num_vertex_buffers = 1,
+            .vertex_attributes = vertex_attributes,
+            .num_vertex_attributes = SDL_arraysize(vertex_attributes)
+        },
         .primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = {
             .fill_mode = SDL_GPU_FILLMODE_FILL,
@@ -315,12 +469,16 @@ int main(int argc, char **argv)
             .front_face = SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE
         },
         .multisample_state = { .sample_count = SDL_GPU_SAMPLECOUNT_1 },
-        .depth_stencil_state = { 0 },
+        .depth_stencil_state = {
+            .compare_op = SDL_GPU_COMPAREOP_LESS,
+            .enable_depth_test = true,
+            .enable_depth_write = true
+        },
         .target_info = {
             .color_target_descriptions = &color_target,
             .num_color_targets = 1,
-            .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_INVALID,
-            .has_depth_stencil_target = false
+            .depth_stencil_format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+            .has_depth_stencil_target = true
         }
     };
     pipeline = SDL_CreateGPUGraphicsPipeline(device, &pipeline_info);
@@ -369,15 +527,18 @@ int main(int argc, char **argv)
         mat4 projection;
         mat4 view_model;
         mat4 mvp;
-        vec3 eye = { 0.0f, 0.0f, -2.0f };
+        vec3 eye = { 0.0f, 0.0f, -3.0f };
         vec3 center = { 0.0f, 0.0f, 0.0f };
         vec3 up = { 0.0f, 1.0f, 0.0f };
-        float aspect = window_height > 0
+        vec3 x_axis = { 1.0f, 0.0f, 0.0f };
+        vec3 y_axis = { 0.0f, 1.0f, 0.0f };
+        float aspect = window_width > 0 && window_height > 0
                            ? (float)window_width / (float)window_height
                            : 1.0f;
         float angle = (float)SDL_GetTicks() * 0.0005f;
         glm_mat4_identity(model);
-        glm_rotate_z(model, angle, model);
+        glm_rotate(model, angle, y_axis);
+        glm_rotate(model, angle * 0.7f, x_axis);
         glm_lookat_lh_zo(eye, center, up, view);
         glm_perspective_lh_zo(glm_rad(60.0f), aspect, 0.1f, 100.0f, projection);
         glm_mat4_mul(view, model, view_model);
@@ -386,10 +547,10 @@ int main(int argc, char **argv)
             igShowDemoWindow(&show_demo_window);
         }
         
-        igBegin("SDL3 GPU triangle", NULL, 0);
+        igBegin("SDL3 GPU textured cube", NULL, 0);
         igText("FPS: %.1f", fps);
         igText("GPU backend: %s", SDL_GetGPUDeviceDriver(device));
-        igText("Triangle rendered with SDL_GPU");
+        igText("Indexed textured cube");
         if (igCheckbox("VSync", &vsync_enabled)) {
             SDL_GPUPresentMode mode = vsync_enabled
                                           ? SDL_GPU_PRESENTMODE_VSYNC
@@ -402,18 +563,26 @@ int main(int argc, char **argv)
             }
         }
         if (igCheckbox("MSAA (4x)", &msaa_enabled)) {
-            SDL_GPUGraphicsPipelineCreateInfo updated_pipeline_info = pipeline_info;
-            updated_pipeline_info.multisample_state.sample_count =
-                msaa_enabled ? SDL_GPU_SAMPLECOUNT_4 : SDL_GPU_SAMPLECOUNT_1;
-            SDL_GPUGraphicsPipeline *updated_pipeline =
-                SDL_CreateGPUGraphicsPipeline(device, &updated_pipeline_info);
-            if (updated_pipeline == NULL) {
-                SDL_Log("Could not change MSAA: %s", SDL_GetError());
-                msaa_enabled = !msaa_enabled;
+            if (msaa_enabled &&
+                !SDL_GPUTextureSupportsSampleCount(device,
+                                                   SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+                                                   SDL_GPU_SAMPLECOUNT_4)) {
+                SDL_Log("4x MSAA is unsupported for the depth format");
+                msaa_enabled = false;
             } else {
-                SDL_WaitForGPUIdle(device);
-                SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
-                pipeline = updated_pipeline;
+                SDL_GPUGraphicsPipelineCreateInfo updated_pipeline_info = pipeline_info;
+                updated_pipeline_info.multisample_state.sample_count =
+                    msaa_enabled ? SDL_GPU_SAMPLECOUNT_4 : SDL_GPU_SAMPLECOUNT_1;
+                SDL_GPUGraphicsPipeline *updated_pipeline =
+                    SDL_CreateGPUGraphicsPipeline(device, &updated_pipeline_info);
+                if (updated_pipeline == NULL) {
+                    SDL_Log("Could not change MSAA: %s", SDL_GetError());
+                    msaa_enabled = !msaa_enabled;
+                } else {
+                    SDL_WaitForGPUIdle(device);
+                    SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
+                    pipeline = updated_pipeline;
+                }
             }
         }
         igEnd();
@@ -440,6 +609,36 @@ int main(int argc, char **argv)
             break;
         }
         if (swapchain_texture != NULL) {
+            if (depth_target == NULL || depth_target_width != swapchain_width ||
+                depth_target_height != swapchain_height ||
+                depth_target_msaa != msaa_enabled) {
+                SDL_WaitForGPUIdle(device);
+                if (depth_target != NULL) {
+                    SDL_ReleaseGPUTexture(device, depth_target);
+                    depth_target = NULL;
+                }
+                SDL_GPUTextureCreateInfo depth_info = {
+                    .type = SDL_GPU_TEXTURETYPE_2D,
+                    .format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+                    .usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+                    .width = swapchain_width,
+                    .height = swapchain_height,
+                    .layer_count_or_depth = 1,
+                    .num_levels = 1,
+                    .sample_count = msaa_enabled ? SDL_GPU_SAMPLECOUNT_4
+                                                 : SDL_GPU_SAMPLECOUNT_1
+                };
+                depth_target = SDL_CreateGPUTexture(device, &depth_info);
+                if (depth_target == NULL) {
+                    SDL_Log("Could not create depth target: %s", SDL_GetError());
+                    SDL_CancelGPUCommandBuffer(command_buffer);
+                    result = EXIT_FAILURE;
+                    break;
+                }
+                depth_target_width = swapchain_width;
+                depth_target_height = swapchain_height;
+                depth_target_msaa = msaa_enabled;
+            }
             if (msaa_enabled &&
                 (msaa_target == NULL || msaa_target_width != swapchain_width ||
                  msaa_target_height != swapchain_height)) {
@@ -479,15 +678,36 @@ int main(int argc, char **argv)
                 .cycle = msaa_enabled,
                 .cycle_resolve_texture = msaa_enabled
             };
+            SDL_GPUDepthStencilTargetInfo depth_info = {
+                .texture = depth_target,
+                .clear_depth = 1.0f,
+                .load_op = SDL_GPU_LOADOP_CLEAR,
+                .store_op = SDL_GPU_STOREOP_DONT_CARE,
+                .stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
+                .stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
+                .cycle = true
+            };
             SDL_GPURenderPass *render_pass =
-                SDL_BeginGPURenderPass(command_buffer, &target, 1, NULL);
+                SDL_BeginGPURenderPass(command_buffer, &target, 1, &depth_info);
             SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
             SDL_GPUTextureSamplerBinding texture_binding = {
                 .texture = triangle_texture,
                 .sampler = triangle_sampler
             };
+            SDL_GPUBufferBinding vertex_binding = {
+                .buffer = cube_vertex_buffer,
+                .offset = 0
+            };
+            SDL_GPUBufferBinding index_binding = {
+                .buffer = cube_index_buffer,
+                .offset = 0
+            };
+            SDL_BindGPUVertexBuffers(render_pass, 0, &vertex_binding, 1);
+            SDL_BindGPUIndexBuffer(render_pass, &index_binding,
+                                   SDL_GPU_INDEXELEMENTSIZE_16BIT);
             SDL_BindGPUFragmentSamplers(render_pass, 0, &texture_binding, 1);
-            SDL_DrawGPUPrimitives(render_pass, 3, 1, 0, 0);
+            SDL_DrawGPUIndexedPrimitives(render_pass,
+                                         SDL_arraysize(cube_indices), 1, 0, 0, 0);
             SDL_EndGPURenderPass(render_pass);
             if (msaa_enabled) {
                 SDL_GPUColorTargetInfo imgui_target = {
@@ -527,7 +747,10 @@ cleanup:
         if (pipeline != NULL) SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
         if (triangle_sampler != NULL) SDL_ReleaseGPUSampler(device, triangle_sampler);
         if (triangle_texture != NULL) SDL_ReleaseGPUTexture(device, triangle_texture);
+        if (cube_vertex_buffer != NULL) SDL_ReleaseGPUBuffer(device, cube_vertex_buffer);
+        if (cube_index_buffer != NULL) SDL_ReleaseGPUBuffer(device, cube_index_buffer);
         if (msaa_target != NULL) SDL_ReleaseGPUTexture(device, msaa_target);
+        if (depth_target != NULL) SDL_ReleaseGPUTexture(device, depth_target);
         if (vertex_shader != NULL) SDL_ReleaseGPUShader(device, vertex_shader);
         if (fragment_shader != NULL) SDL_ReleaseGPUShader(device, fragment_shader);
         if (window != NULL) SDL_ReleaseWindowFromGPUDevice(device, window);
